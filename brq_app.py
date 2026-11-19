@@ -38,7 +38,8 @@ LEFT JOIN produit_famille pf ON pf.Produit_Code=p.Code
 LEFT JOIN famille f ON f.Code=pf.Famille_Code
 LEFT JOIN produit_sousfammille psf ON psf.Produit_Code=p.Code
 LEFT JOIN sous_famille sf ON sf.Code=psf.SousFamille_Code
-WHERE e.Date=%(brq_date)s AND e.Type_mvt='S' AND e.Type_bon IN ('F','FA')
+WHERE e.Date >= %(date1)s AND e.Date <= %(date2)s
+ AND e.Type_mvt='S' AND e.Type_bon IN ('F','FA')
  AND ((f.Libelle='VOLAILLE' AND sf.Libelle IN ('CHAIR','PONTE'))
  OR (f.Libelle='RUMINANTS' AND sf.Libelle IN ('BOVIN','OVIN'))
  OR (f.Libelle='DIVERS' AND sf.Libelle='DIVERS'))
@@ -143,7 +144,6 @@ class BrqApp:
         self.busy = False
         today = dt.date.today()
         self.sql_var = tk.StringVar(value=DEFAULT_SQL_PATH)
-        self.day_var = tk.StringVar(value=today.isoformat())
         self.from_var = tk.StringVar(value=today.replace(day=1).isoformat())
         self.to_var = tk.StringVar(value=today.isoformat())
         self.status_var = tk.StringVar(value="Vérification de la base...")
@@ -171,24 +171,26 @@ class BrqApp:
         ttk.Label(row, text="Attention : l'import remplace la base actuelle.",
                   foreground="#9a3412").pack(side="left", padx=10)
 
-        daily = ttk.LabelFrame(self.root, text="BRQ quotidien", padding=10)
-        daily.pack(fill="x", **pad)
-        row = ttk.Frame(daily); row.pack(fill="x")
-        ttk.Label(row, text="Date (AAAA-MM-JJ) :", width=19).pack(side="left")
-        ttk.Entry(row, textvariable=self.day_var, width=18).pack(side="left")
-        self.daily_btn = ttk.Button(row, text="Générer le BRQ", command=self.on_daily)
-        self.daily_btn.pack(side="left", padx=10)
-        ttk.Button(row, text="Ouvrir le dossier", command=self.open_folder).pack(side="left")
-
-        recap = ttk.LabelFrame(self.root, text="Récapitulatif par période", padding=10)
-        recap.pack(fill="x", **pad)
-        row = ttk.Frame(recap); row.pack(fill="x")
+        period = ttk.LabelFrame(self.root, text="Période du rapport", padding=10)
+        period.pack(fill="x", **pad)
+        row = ttk.Frame(period); row.pack(fill="x")
         ttk.Label(row, text="Du :", width=7).pack(side="left")
         ttk.Entry(row, textvariable=self.from_var, width=15).pack(side="left")
         ttk.Label(row, text="Au :", padding=(12, 0, 4, 0)).pack(side="left")
         ttk.Entry(row, textvariable=self.to_var, width=15).pack(side="left")
-        self.recap_btn = ttk.Button(row, text="Exporter le récap", command=self.on_recap)
-        self.recap_btn.pack(side="left", padx=10)
+
+        shortcuts = ttk.Frame(period); shortcuts.pack(fill="x", pady=(8, 0))
+        ttk.Label(shortcuts, text="Raccourcis :").pack(side="left", padx=(0, 8))
+        ttk.Button(shortcuts, text="Date", command=self.select_date).pack(side="left", padx=3)
+        ttk.Button(shortcuts, text="Mois", command=self.select_month).pack(side="left", padx=3)
+        ttk.Button(shortcuts, text="Année", command=self.select_year).pack(side="left", padx=3)
+
+        actions = ttk.Frame(period); actions.pack(fill="x", pady=(8, 0))
+        self.daily_btn = ttk.Button(actions, text="Générer le BRQ", command=self.on_daily)
+        self.daily_btn.pack(side="left")
+        self.recap_btn = ttk.Button(actions, text="Exporter le récap", command=self.on_recap)
+        self.recap_btn.pack(side="left", padx=8)
+        ttk.Button(actions, text="Ouvrir le dossier", command=self.open_folder).pack(side="left")
 
         log = ttk.LabelFrame(self.root, text="Journal", padding=10)
         log.pack(fill="both", expand=True, **pad)
@@ -245,6 +247,42 @@ class BrqApp:
             self.root.after(0, lambda: self.status_var.set(value))
         threading.Thread(target=check, daemon=True).start()
 
+    def _period_anchor_date(self):
+        """Use the editable To date as the reference for period shortcuts."""
+        try:
+            return parse_date(self.to_var.get())
+        except ValueError as exc:
+            messagebox.showerror("Date invalide", str(exc))
+            return None
+
+    def select_date(self):
+        anchor = self._period_anchor_date()
+        if anchor is not None:
+            self.from_var.set(anchor.isoformat())
+            self.to_var.set(anchor.isoformat())
+
+    def select_month(self):
+        anchor = self._period_anchor_date()
+        if anchor is None:
+            return
+        first_day = anchor.replace(day=1)
+        today = dt.date.today()
+        last_day = anchor if (anchor.year, anchor.month) == (today.year, today.month) else (
+            (first_day.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+            - dt.timedelta(days=1)
+        )
+        self.from_var.set(first_day.isoformat())
+        self.to_var.set(last_day.isoformat())
+
+    def select_year(self):
+        anchor = self._period_anchor_date()
+        if anchor is None:
+            return
+        today = dt.date.today()
+        end_day = anchor if anchor.year == today.year else dt.date(anchor.year, 12, 31)
+        self.from_var.set(dt.date(anchor.year, 1, 1).isoformat())
+        self.to_var.set(end_day.isoformat())
+
     def browse_sql(self):
         path = filedialog.askopenfilename(
             title="Choisir le fichier SQL",
@@ -271,34 +309,56 @@ class BrqApp:
         self.log("Import SQL terminé.")
         self.check_connection()
 
-    def on_daily(self):
-        try: date = parse_date(self.day_var.get())
+    def _validated_period(self):
+        try:
+            start = parse_date(self.from_var.get())
+            end = parse_date(self.to_var.get())
         except ValueError as exc:
-            messagebox.showerror("Date invalide", str(exc)); return
-        self.run_worker(f"BRQ du {date}...", self.export_daily, date)
+            messagebox.showerror("Dates invalides", str(exc))
+            return None
+        if start > end:
+            messagebox.showerror(
+                "Période invalide",
+                "La date de début doit être antérieure ou égale à la date de fin."
+            )
+            return None
+        return start, end
 
-    def export_daily(self, date):
+    def on_daily(self):
+        period = self._validated_period()
+        if period is None:
+            return
+        start, end = period
+        self.run_worker(
+            f"Génération du BRQ du {start} au {end}...",
+            self.export_daily, start, end
+        )
+
+    def export_daily(self, start, end):
         self.log("Connexion à la base existante : aucun import SQL.")
         conn = connect_database()
-        try: frame = pd.read_sql(BRQ_QUERY, conn, params={"brq_date": date})
-        finally: conn.close()
+        try:
+            frame = pd.read_sql(
+                BRQ_QUERY, conn, params={"date1": start, "date2": end}
+            )
+        finally:
+            conn.close()
         if frame.empty:
-            self.log("Aucune ligne trouvée pour cette date."); return
-        path = os.path.join(WORK_FOLDER, f"BRQ_Export_{date}.xlsx")
+            self.log("Aucune ligne trouvée pour cette période.")
+            return
+        path = os.path.join(WORK_FOLDER, f"BRQ_Export_{start}_au_{end}.xlsx")
         write_excel(frame, path, "BRQ")
         self.log(f"{len(frame)} lignes exportées : {path}")
 
     def on_recap(self):
-        try:
-            start, end = parse_date(self.from_var.get()), parse_date(self.to_var.get())
-        except ValueError as exc:
-            messagebox.showerror("Dates invalides", str(exc)); return
-        if start > end:
-            messagebox.showerror("Période invalide",
-                                 "La date de début doit être antérieure ou égale à la date de fin.")
+        period = self._validated_period()
+        if period is None:
             return
-        self.run_worker(f"Récapitulatif du {start} au {end}...",
-                        self.export_recap, start, end)
+        start, end = period
+        self.run_worker(
+            f"Récapitulatif du {start} au {end}...",
+            self.export_recap, start, end
+        )
 
     def export_recap(self, start, end):
         self.log("Connexion à la base existante : aucun import SQL.")
