@@ -74,7 +74,7 @@ LEFT JOIN sous_famille sf ON sf.Code = psf.SousFamille_Code
 WHERE
     e.Date = %(brq_date)s
     AND e.Type_mvt = 'S'
-    AND e.Type_bon = 'F'
+    AND e.Type_bon IN ('F', 'FA')
     AND (
         (f.Libelle = 'VOLAILLE' AND sf.Libelle IN ('CHAIR', 'PONTE'))
         OR (f.Libelle = 'RUMINANTS' AND sf.Libelle IN ('BOVIN', 'OVIN'))

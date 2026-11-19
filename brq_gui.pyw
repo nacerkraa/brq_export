@@ -78,7 +78,7 @@ WHERE
     e.Date >= %(date1)s
     AND e.Date <= %(date2)s
     AND e.Type_mvt = 'S'
-    AND e.Type_bon = 'F';
+    AND e.Type_bon IN ('F', 'FA')
 """
 
 
