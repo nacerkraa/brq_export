@@ -134,6 +134,55 @@ def write_excel(dataframe, output_path, sheet_name):
             letter = sheet.cell(row=1, column=index).column_letter
             sheet.column_dimensions[letter].width = min(max([len(name), *lengths])+2, 50)
 
+def fetch_period_totals(connection, start_date, end_date):
+    """Return validated category quantities for one inclusive date period."""
+    frame = pd.read_sql(
+        RECAP_QUERY,
+        connection,
+        params={"date1": start_date, "date2": end_date}
+    )
+    categories = ["CHAIR", "PONTE", "RUMINANTS", "DIVERS"]
+    if frame.empty:
+        return {category: 0.0 for category in categories}
+    row = frame.iloc[0]
+    return {
+        category: (0.0 if pd.isna(row.get(category)) else float(row[category]))
+        for category in categories
+    }
+
+
+def build_cumulative_summary(connection, reference_date):
+    """
+    Calculate daily, month-to-date and year-to-date totals.
+
+    All three periods are anchored to the selected report end date.
+    """
+    month_start = reference_date.replace(day=1)
+    year_start = dt.date(reference_date.year, 1, 1)
+
+    daily = fetch_period_totals(connection, reference_date, reference_date)
+    monthly = fetch_period_totals(connection, month_start, reference_date)
+    yearly = fetch_period_totals(connection, year_start, reference_date)
+
+    categories = ["CHAIR", "PONTE", "RUMINANTS", "DIVERS"]
+    rows = [
+        {
+            "Catégorie": category,
+            "Jour": daily[category],
+            "Cumul mois": monthly[category],
+            "Cumul année": yearly[category],
+        }
+        for category in categories
+    ]
+    rows.append({
+        "Catégorie": "TOTAL",
+        "Jour": sum(daily.values()),
+        "Cumul mois": sum(monthly.values()),
+        "Cumul année": sum(yearly.values()),
+    })
+    return pd.DataFrame(rows)
+
+
 class BrqApp:
     def __init__(self, root):
         self.root = root
@@ -362,11 +411,16 @@ class BrqApp:
 
     def export_recap(self, start, end):
         self.log("Connexion à la base existante : aucun import SQL.")
+        self.log(
+            f"Calcul des cumuls à la date de référence {end} "
+            "(jour, début du mois et début de l'année)."
+        )
         conn = connect_database()
         try:
-            frame = pd.read_sql(RECAP_QUERY, conn, params={"date1": start, "date2": end})
-        finally: conn.close()
-        path = os.path.join(WORK_FOLDER, f"BRQ_Recap_{start}_au_{end}.xlsx")
+            frame = build_cumulative_summary(conn, end)
+        finally:
+            conn.close()
+        path = os.path.join(WORK_FOLDER, f"BRQ_Recap_{end}.xlsx")
         write_excel(frame, path, "Recap")
         self.log(f"Récapitulatif enregistré : {path}")
 
