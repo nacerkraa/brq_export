@@ -21,6 +21,8 @@ DB_CONFIG = {"host": "localhost", "user": "root", "password": "",
              "database": "UAB_OULEDHAMLA_COM26", "port": 3306,
              "charset": "utf8mb4", "connect_timeout": 5}
 
+ANNUAL_OBJECTIVE = 380000.00
+
 BRQ_QUERY = """
 SELECT
  CASE
@@ -160,7 +162,7 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
         "Code client", "Client", "Code produit", "Désignation",
         "Quantité", "Prix unitaire", "Montant"
     ]
-    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
 
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(detail_headers))
     title = sheet.cell(1, 1, "BRQ — ÉTAT DES VENTES")
@@ -224,7 +226,9 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
         for col, value in enumerate(record, 1):
             cell = sheet.cell(row_number, col, value)
             cell.border = Border(bottom=thin_grey)
-            if col > 1:
+            if col == 5:
+                cell.number_format = '0.00"%"'
+            elif col > 1:
                 cell.number_format = '#,##0.00;[Red]-#,##0.00'
             if str(record[0]) == "TOTAL":
                 cell.font = Font(bold=True)
@@ -262,6 +266,13 @@ def _display_value(value):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return f"{value:,.2f}"
     return str(value)
+
+
+def _display_summary_value(column, value):
+    """Format the annual objective achievement as a percentage."""
+    if column == "Objectif annuel (%)":
+        return "" if pd.isna(value) else f"{float(value):.2f}%"
+    return _display_value(value)
 
 
 def write_report_pdf(details, summary, start_date, end_date, output_path):
@@ -359,16 +370,16 @@ def write_report_pdf(details, summary, start_date, end_date, output_path):
         Paragraph("RÉCAPITULATIF CUMULÉ", styles["Heading2"]),
         Spacer(1, 4)
     ])
-    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
     summary_data = [[Paragraph(escape(x), header_style) for x in summary_headers]]
     for record in summary.itertuples(index=False, name=None):
         summary_data.append([
-            Paragraph(escape(_display_value(value)), cell_style)
-            for value in record
+            Paragraph(escape(_display_summary_value(column, value)), cell_style)
+            for column, value in zip(summary.columns, record)
         ])
     summary_table = Table(
         summary_data,
-        colWidths=[available_width * 0.25] * 4,
+        colWidths=[available_width * 0.20] * 5,
         repeatRows=1,
         hAlign="LEFT"
     )
@@ -507,9 +518,9 @@ def write_report_png_pages(details, summary, start_date, end_date, output_dir):
     draw.text((margin, 62),
               f"Période du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}",
               fill="#333333", font=small_font)
-    recap_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+    recap_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
     recap_content_width = image_width - 2 * margin
-    recap_widths = [recap_content_width // 4] * 4
+    recap_widths = [recap_content_width // 5] * 5
     recap_widths[-1] += recap_content_width - sum(recap_widths)
     y = 105
     x = margin
@@ -520,8 +531,8 @@ def write_report_png_pages(details, summary, start_date, end_date, output_dir):
     for record in summary.itertuples(index=False, name=None):
         x = margin
         is_total = str(record[0]) == "TOTAL"
-        for width, value in zip(recap_widths, record):
-            draw_cell(draw, x, y, width, row_height, value,
+        for column, width, value in zip(summary.columns, recap_widths, record):
+            draw_cell(draw, x, y, width, row_height, _display_summary_value(column, value),
                       bold_font if is_total else font,
                       "#D9EAF7" if is_total else "#FFFFFF")
             x += width
@@ -575,14 +586,17 @@ def build_cumulative_summary(connection, reference_date):
             "Jour": daily[category],
             "Cumul mois": monthly[category],
             "Cumul année": yearly[category],
+            "Objectif annuel (%)": None,
         }
         for category in categories
     ]
+    annual_total = sum(yearly.values())
     rows.append({
         "Catégorie": "TOTAL",
         "Jour": sum(daily.values()),
         "Cumul mois": sum(monthly.values()),
-        "Cumul année": sum(yearly.values()),
+        "Cumul année": annual_total,
+        "Objectif annuel (%)": annual_total / ANNUAL_OBJECTIVE * 100,
     })
     return pd.DataFrame(rows)
 
@@ -933,15 +947,18 @@ class BrqApp:
                 values=tuple(_display_value(value) for value in record)
             )
 
-        summary_columns = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+        summary_columns = list(summary.columns)
         summary_tree = create_tree(
             summary_tab, summary_columns, summary_columns,
-            [220, 180, 180, 180]
+            [220, 180, 180, 180, 190]
         )
         for record in summary.itertuples(index=False, name=None):
             summary_tree.insert(
                 "", "end",
-                values=tuple(_display_value(value) for value in record)
+                values=tuple(
+                    _display_summary_value(column, value)
+                    for column, value in zip(summary_columns, record)
+                )
             )
 
     def open_folder(self):
