@@ -32,8 +32,7 @@ SELECT
   WHEN f.Libelle='DIVERS' AND sf.Libelle='DIVERS' THEN 'DIVERS'
  END AS BRQ_Category,
  e.Code AS Invoice_Reference,
- e.Code_FC AS Document_Code,
- e.code_tiers AS Client_Code,
+ e.Code_FC AS Client_Code,
  e.Libelle_Client AS Client_Name,
  d.Produit_Code,
  d.Libelle AS Product_Label,
@@ -153,14 +152,14 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
     section_fill = PatternFill("solid", fgColor=light_blue)
 
     detail_columns = [
-        "BRQ_Category", "Invoice_Reference", "Document_Code",
-        "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
-        "Quantite", "Unit_Price", "Total_Amount"
+        "BRQ_Category", "Invoice_Reference", "Client_Name", "Client_Code",
+        "Produit_Code", "Quantite", "Total_Amount", "Product_Label",
+        "Unit_Price"
     ]
     detail_headers = [
-        "Catégorie", "Référence facture", "Code document",
-        "Code client", "Client", "Code produit", "Désignation",
-        "Quantité", "Prix unitaire", "Montant"
+        "Catégorie", "Référence facture", "Client", "Code client",
+        "Code produit", "Quantité", "Montant", "Désignation",
+        "Prix unitaire"
     ]
     summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
 
@@ -202,9 +201,9 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
                 cell.font = Font(bold=True)
                 fill = category_fills.get(str(value), pale_grey)
                 cell.fill = PatternFill("solid", fgColor=fill)
-            elif col in (8, 9, 10):
+            elif col in (5, 6, 7, 9):
                 cell.number_format = '#,##0.00;[Red]-#,##0.00'
-            if col in (2, 3, 4, 6):
+            if col in (2, 4, 5):
                 cell.number_format = "@"
         detail_count += 1
 
@@ -234,7 +233,7 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
                 cell.font = Font(bold=True)
                 cell.fill = section_fill
 
-    widths = [16, 22, 17, 16, 30, 15, 34, 14, 16, 17]
+    widths = [16, 22, 30, 16, 15, 14, 17, 34, 16]
     for index, width in enumerate(widths, 1):
         sheet.column_dimensions[get_column_letter(index)].width = width
 
@@ -318,15 +317,15 @@ def write_report_pdf(details, summary, start_date, end_date, output_path):
         Spacer(1, 3)
     ]
     headers = [
-        "Catégorie", "Référence facture", "Code document", "Code client",
-        "Client", "Code produit", "Désignation", "Quantité",
-        "Prix unitaire", "Montant"
+        "Catégorie", "Référence facture", "Client", "Code client",
+        "Code produit", "Quantité", "Montant", "Désignation",
+        "Prix unitaire"
     ]
     table_data = [[Paragraph(escape(label), header_style) for label in headers]]
     detail_columns = [
-        "BRQ_Category", "Invoice_Reference", "Document_Code",
-        "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
-        "Quantite", "Unit_Price", "Total_Amount"
+        "BRQ_Category", "Invoice_Reference", "Client_Name", "Client_Code",
+        "Produit_Code", "Quantite", "Total_Amount", "Product_Label",
+        "Unit_Price"
     ]
     for record in details.reindex(columns=detail_columns).itertuples(index=False, name=None):
         table_data.append([
@@ -335,7 +334,7 @@ def write_report_pdf(details, summary, start_date, end_date, output_path):
         ])
 
     available_width = page_width - 28 * mm
-    proportions = [0.075, 0.095, 0.075, 0.075, 0.15, 0.065, 0.18, 0.07, 0.105, 0.11]
+    proportions = [0.09, 0.12, 0.18, 0.09, 0.09, 0.07, 0.10, 0.16, 0.10]
     col_widths = [available_width * value / sum(proportions) for value in proportions]
     detail_table = LongTable(
         table_data, colWidths=col_widths, repeatRows=1, hAlign="LEFT"
@@ -425,15 +424,15 @@ def write_report_png_pages(details, summary, start_date, end_date, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     base_name = f"BRQ_{start_date}_au_{end_date}"
     headers = [
-        "Catégorie", "Réf. facture", "Code doc.", "Code client", "Client",
-        "Code produit", "Désignation", "Quantité", "Prix unit.", "Montant"
+        "Catégorie", "Réf. facture", "Client", "Code client",
+        "Code produit", "Quantité", "Montant", "Désignation", "Prix unit."
     ]
     columns = [
-        "BRQ_Category", "Invoice_Reference", "Document_Code",
-        "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
-        "Quantite", "Unit_Price", "Total_Amount"
+        "BRQ_Category", "Invoice_Reference", "Client_Name", "Client_Code",
+        "Produit_Code", "Quantite", "Total_Amount", "Product_Label",
+        "Unit_Price"
     ]
-    widths = [125, 135, 115, 120, 230, 115, 285, 115, 135, 135]
+    widths = [125, 135, 230, 120, 115, 115, 135, 285, 135]
     image_width = sum(widths) + 60
     margin = 30
     row_height = 34
@@ -899,14 +898,14 @@ class BrqApp:
         notebook.add(summary_tab, text="Récapitulatif cumulé")
 
         detail_columns = [
-            "BRQ_Category", "Invoice_Reference", "Document_Code",
-            "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
-            "Quantite", "Unit_Price", "Total_Amount"
+            "BRQ_Category", "Invoice_Reference", "Client_Name", "Client_Code",
+            "Produit_Code", "Quantite", "Total_Amount", "Product_Label",
+            "Unit_Price"
         ]
         detail_labels = [
-            "Catégorie", "Référence facture", "Code document", "Code client",
-            "Client", "Code produit", "Désignation", "Quantité",
-            "Prix unitaire", "Montant"
+            "Catégorie", "Référence facture", "Client", "Code client",
+            "Code produit", "Quantité", "Montant", "Désignation",
+            "Prix unitaire"
         ]
 
         def create_tree(parent, columns, labels, widths):
@@ -935,10 +934,35 @@ class BrqApp:
             container.columnconfigure(0, weight=1)
             return tree
 
+        default_detail_columns = {
+            "BRQ_Category", "Invoice_Reference", "Client_Name",
+            "Client_Code", "Produit_Code", "Quantite", "Total_Amount"
+        }
+        column_widths = [95, 125, 190, 110, 100, 95, 110, 220, 110]
+        selector = ttk.LabelFrame(detail_tab, text="Colonnes à afficher", padding=(8, 5))
+        selector.pack(fill="x", pady=(0, 6))
+        visible_vars = {}
+        for index, (column, label) in enumerate(zip(detail_columns, detail_labels)):
+            variable = tk.BooleanVar(value=column in default_detail_columns)
+            visible_vars[column] = variable
+            ttk.Checkbutton(
+                selector, text=label, variable=variable,
+                command=lambda: update_visible_columns()
+            ).grid(row=index // 5, column=index % 5, sticky="w", padx=5, pady=2)
+
         detail_tree = create_tree(
-            detail_tab, detail_columns, detail_labels,
-            [95, 125, 110, 100, 190, 100, 220, 95, 110, 110]
+            detail_tab, detail_columns, detail_labels, column_widths
         )
+        detail_tree["displaycolumns"] = [
+            column for column in detail_columns if visible_vars[column].get()
+        ]
+
+        def update_visible_columns():
+            selected = [
+                column for column in detail_columns
+                if visible_vars[column].get()
+            ]
+            detail_tree["displaycolumns"] = selected or ("BRQ_Category",)
         for record in details.reindex(columns=detail_columns).itertuples(
             index=False, name=None
         ):
