@@ -29,7 +29,7 @@ SELECT
   WHEN f.Libelle='RUMINANTS' AND sf.Libelle IN ('BOVIN','OVIN') THEN 'RUMINANTS'
   WHEN f.Libelle='DIVERS' AND sf.Libelle='DIVERS' THEN 'DIVERS'
  END AS BRQ_Category,
- e.Reference AS Invoice_Reference,
+ e.Code AS Invoice_Reference,
  e.Code_FC AS Document_Code,
  e.code_tiers AS Client_Code,
  e.Libelle_Client AS Client_Name,
@@ -56,7 +56,7 @@ ORDER BY CASE
  WHEN f.Libelle='VOLAILLE' AND sf.Libelle='PONTE' THEN 2
  WHEN f.Libelle='RUMINANTS' AND sf.Libelle IN ('BOVIN','OVIN') THEN 3
  WHEN f.Libelle='DIVERS' AND sf.Libelle='DIVERS' THEN 4
- END, e.Reference, e.Code_FC, e.Libelle_Client, d.Produit_Code
+ END, e.Code, e.Code_FC, e.Libelle_Client, d.Produit_Code
 """
 
 RECAP_QUERY = """
