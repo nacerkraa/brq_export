@@ -1,5 +1,5 @@
 """Consolidated BRQ desktop application.
-Dependencies: pip install pymysql pandas openpyxl
+Dependencies: pip install pymysql pandas openpyxl reportlab pillow
 """
 from __future__ import annotations
 import datetime as dt
@@ -255,6 +255,288 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
 
     workbook.save(output_path)
 
+
+def _display_value(value):
+    if pd.isna(value):
+        return ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:,.2f}"
+    return str(value)
+
+
+def write_report_pdf(details, summary, start_date, end_date, output_path):
+    """Create a paginated, landscape A3 PDF with details and cumulative recap."""
+    from xml.sax.saxutils import escape
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A3, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, LongTable
+    )
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    page_width, _ = landscape(A3)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "BrqTitle", parent=styles["Title"], fontName="Helvetica-Bold",
+        fontSize=16, leading=20, textColor=colors.HexColor("#1F4E78"),
+        alignment=TA_CENTER, spaceAfter=5
+    )
+    period_style = ParagraphStyle(
+        "BrqPeriod", parent=styles["Normal"], fontSize=9,
+        alignment=TA_CENTER, spaceAfter=12
+    )
+    cell_style = ParagraphStyle(
+        "BrqCell", parent=styles["Normal"], fontSize=6.5, leading=8,
+        wordWrap="CJK"
+    )
+    header_style = ParagraphStyle(
+        "BrqHeader", parent=cell_style, fontName="Helvetica-Bold",
+        textColor=colors.white, alignment=TA_CENTER
+    )
+
+    story = [
+        Paragraph("BRQ — ÉTAT DES VENTES", title_style),
+        Paragraph(
+            f"Période : du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}",
+            period_style
+        ),
+        Paragraph("DÉTAIL DES VENTES", styles["Heading2"]),
+        Spacer(1, 3)
+    ]
+    headers = [
+        "Catégorie", "Référence facture", "Code document", "Code client",
+        "Client", "Code produit", "Désignation", "Quantité",
+        "Prix unitaire", "Montant"
+    ]
+    table_data = [[Paragraph(escape(label), header_style) for label in headers]]
+    detail_columns = [
+        "BRQ_Category", "Invoice_Reference", "Document_Code",
+        "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
+        "Quantite", "Unit_Price", "Total_Amount"
+    ]
+    for record in details.reindex(columns=detail_columns).itertuples(index=False, name=None):
+        table_data.append([
+            Paragraph(escape(_display_value(value)), cell_style)
+            for value in record
+        ])
+
+    available_width = page_width - 28 * mm
+    proportions = [0.075, 0.095, 0.075, 0.075, 0.15, 0.065, 0.18, 0.07, 0.105, 0.11]
+    col_widths = [available_width * value / sum(proportions) for value in proportions]
+    detail_table = LongTable(
+        table_data, colWidths=col_widths, repeatRows=1, hAlign="LEFT"
+    )
+    detail_commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#C8D2DC")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4)
+    ]
+    fills = {
+        "CHAIR": "#E2F0D9", "PONTE": "#FFF2CC",
+        "RUMINANTS": "#DDEBF7", "DIVERS": "#E4DFEC"
+    }
+    for row_index, category in enumerate(details.get("BRQ_Category", []), 1):
+        fill = fills.get(str(category))
+        if fill:
+            detail_commands.append(
+                ("BACKGROUND", (0, row_index), (0, row_index), colors.HexColor(fill))
+            )
+    detail_table.setStyle(TableStyle(detail_commands))
+    if len(table_data) == 1:
+        story.append(Paragraph("Aucun détail pour cette période.", styles["Normal"]))
+    else:
+        story.append(detail_table)
+
+    story.extend([
+        Spacer(1, 12),
+        Paragraph("RÉCAPITULATIF CUMULÉ", styles["Heading2"]),
+        Spacer(1, 4)
+    ])
+    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+    summary_data = [[Paragraph(escape(x), header_style) for x in summary_headers]]
+    for record in summary.itertuples(index=False, name=None):
+        summary_data.append([
+            Paragraph(escape(_display_value(value)), cell_style)
+            for value in record
+        ])
+    summary_table = Table(
+        summary_data,
+        colWidths=[available_width * 0.25] * 4,
+        repeatRows=1,
+        hAlign="LEFT"
+    )
+    summary_commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#C8D2DC")),
+        ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5)
+    ]
+    for row_index, record in enumerate(summary.itertuples(index=False, name=None), 1):
+        if str(record[0]) == "TOTAL":
+            summary_commands.extend([
+                ("BACKGROUND", (0, row_index), (-1, row_index), colors.HexColor("#D9EAF7")),
+                ("FONTNAME", (0, row_index), (-1, row_index), "Helvetica-Bold")
+            ])
+    summary_table.setStyle(TableStyle(summary_commands))
+    story.append(summary_table)
+
+    def add_page_number(canvas, document):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.HexColor("#666666"))
+        canvas.drawRightString(
+            page_width - 14 * mm, 9 * mm,
+            f"Page {document.page}"
+        )
+        canvas.restoreState()
+
+    document = SimpleDocTemplate(
+        output_path, pagesize=landscape(A3),
+        rightMargin=14 * mm, leftMargin=14 * mm,
+        topMargin=12 * mm, bottomMargin=16 * mm,
+        title="BRQ - Etat des ventes"
+    )
+    document.build(story, onFirstPage=add_page_number, onLaterPages=add_page_number)
+
+
+def write_report_png_pages(details, summary, start_date, end_date, output_dir):
+    """Export readable, numbered PNG pages; the final page contains the recap."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    os.makedirs(output_dir, exist_ok=True)
+    base_name = f"BRQ_{start_date}_au_{end_date}"
+    headers = [
+        "Catégorie", "Réf. facture", "Code doc.", "Code client", "Client",
+        "Code produit", "Désignation", "Quantité", "Prix unit.", "Montant"
+    ]
+    columns = [
+        "BRQ_Category", "Invoice_Reference", "Document_Code",
+        "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
+        "Quantite", "Unit_Price", "Total_Amount"
+    ]
+    widths = [125, 135, 115, 120, 230, 115, 285, 115, 135, 135]
+    image_width = sum(widths) + 60
+    margin = 30
+    row_height = 34
+    title_height = 105
+    rows_per_page = 22
+
+    font_path = r"C:\Windows\Fonts\arial.ttf"
+    bold_path = r"C:\Windows\Fonts\arialbd.ttf"
+    try:
+        font = ImageFont.truetype(font_path, 15)
+        bold_font = ImageFont.truetype(bold_path, 16)
+        title_font = ImageFont.truetype(bold_path, 25)
+        small_font = ImageFont.truetype(font_path, 15)
+    except OSError:
+        font = ImageFont.load_default()
+        bold_font = font
+        title_font = font
+        small_font = font
+
+    def draw_cell(draw, x, y, width, height, value, selected_font, fill):
+        draw.rectangle((x, y, x + width, y + height), fill=fill,
+                       outline="#C8D2DC", width=1)
+        text = _display_value(value).replace("\\n", " ")
+        max_width = max(10, width - 10)
+        while text and draw.textbbox((0, 0), text, font=selected_font)[2] > max_width:
+            text = text[:-2] + "…" if len(text) > 2 else ""
+        draw.text((x + 5, y + 8), text, fill="#202020", font=selected_font)
+
+    chunks = [
+        details.iloc[index:index + rows_per_page]
+        for index in range(0, len(details), rows_per_page)
+    ]
+    if not chunks:
+        chunks = [details.iloc[0:0]]
+    page_paths = []
+
+    for page_index, chunk in enumerate(chunks, 1):
+        image_height = title_height + (len(chunk) + 1) * row_height + 45
+        image = Image.new("RGB", (image_width, image_height), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((margin, 18), "BRQ — ÉTAT DES VENTES",
+                  fill="#1F4E78", font=title_font)
+        draw.text(
+            (margin, 58),
+            f"Période : du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y} "
+            f"| Détails — page {page_index}/{len(chunks)}",
+            fill="#333333", font=small_font
+        )
+        y = title_height
+        x = margin
+        for width, label in zip(widths, headers):
+            draw_cell(draw, x, y, width, row_height, label, bold_font, "#1F4E78")
+            x += width
+        y += row_height
+
+        for record in chunk.reindex(columns=columns).itertuples(index=False, name=None):
+            x = margin
+            category = str(record[0])
+            row_fill = "#FFFFFF" if y // row_height % 2 else "#F7F9FB"
+            for column_index, (width, value) in enumerate(zip(widths, record)):
+                fill = {
+                    "CHAIR": "#E2F0D9", "PONTE": "#FFF2CC",
+                    "RUMINANTS": "#DDEBF7", "DIVERS": "#E4DFEC"
+                }.get(category, row_fill) if column_index == 0 else row_fill
+                draw_cell(draw, x, y, width, row_height, value, font, fill)
+                x += width
+            y += row_height
+
+        if chunk.empty:
+            draw.text((margin, y + 8), "Aucun détail pour cette période.",
+                      fill="#555555", font=font)
+
+        path = os.path.join(output_dir, f"{base_name}_page_{page_index:03d}.png")
+        image.save(path, format="PNG", optimize=True)
+        page_paths.append(path)
+
+    recap_height = 230
+    recap_image = Image.new("RGB", (image_width, recap_height), "white")
+    draw = ImageDraw.Draw(recap_image)
+    draw.text((margin, 20), "BRQ — RÉCAPITULATIF CUMULÉ",
+              fill="#1F4E78", font=title_font)
+    draw.text((margin, 62),
+              f"Période du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}",
+              fill="#333333", font=small_font)
+    recap_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+    recap_widths = [width * image_width // sum(widths) for width in [300, 300, 300, 300]]
+    recap_widths[-1] += image_width - sum(recap_widths)
+    y = 105
+    x = margin
+    for width, label in zip(recap_widths, recap_headers):
+        draw_cell(draw, x, y, width, row_height, label, bold_font, "#1F4E78")
+        x += width
+    y += row_height
+    for record in summary.itertuples(index=False, name=None):
+        x = margin
+        is_total = str(record[0]) == "TOTAL"
+        for width, value in zip(recap_widths, record):
+            draw_cell(draw, x, y, width, row_height, value,
+                      bold_font if is_total else font,
+                      "#D9EAF7" if is_total else "#FFFFFF")
+            x += width
+        y += row_height
+
+    recap_path = os.path.join(
+        output_dir, f"{base_name}_page_{len(page_paths) + 1:03d}_recap.png"
+    )
+    recap_image.crop((0, 0, image_width, y + 20)).save(
+        recap_path, format="PNG", optimize=True
+    )
+    page_paths.append(recap_path)
+    return page_paths
+
+
+
 def fetch_period_totals(connection, start_date, end_date):
     """Return validated category quantities for one inclusive date period."""
     frame = pd.read_sql(
@@ -317,6 +599,7 @@ class BrqApp:
         self.from_var = tk.StringVar(value=today.replace(day=1).isoformat())
         self.to_var = tk.StringVar(value=today.isoformat())
         self.status_var = tk.StringVar(value="Vérification de la base...")
+        self.output_var = tk.StringVar(value="Excel")
         self.build_ui()
         root.after(100, self.poll_messages)
         root.after(200, self.check_connection)
@@ -356,11 +639,18 @@ class BrqApp:
         ttk.Button(shortcuts, text="Année", command=self.select_year).pack(side="left", padx=3)
 
         actions = ttk.Frame(period); actions.pack(fill="x", pady=(8, 0))
+        ttk.Label(actions, text="Sortie :").pack(side="left", padx=(0, 6))
+        self.output_combo = ttk.Combobox(
+            actions, textvariable=self.output_var,
+            values=("Visualisation", "Excel", "PDF", "PNG"),
+            state="readonly", width=16
+        )
+        self.output_combo.pack(side="left", padx=(0, 10))
         self.daily_btn = ttk.Button(
-            actions, text="Générer le rapport Excel", command=self.on_daily
+            actions, text="Exécuter", command=self.on_daily
         )
         self.daily_btn.pack(side="left")
-        ttk.Button(actions, text="Ouvrir le dossier", command=self.open_folder).pack(side="left")
+        ttk.Button(actions, text="Ouvrir le dossier", command=self.open_folder).pack(side="left", padx=8)
 
         log = ttk.LabelFrame(self.root, text="Journal", padding=10)
         log.pack(fill="both", expand=True, **pad)
@@ -499,16 +789,37 @@ class BrqApp:
         if period is None:
             return
         start, end = period
+        mode = self.output_var.get()
+
+        output_path = None
+        if mode == "PDF":
+            output_path = filedialog.asksaveasfilename(
+                title="Enregistrer le rapport PDF",
+                initialdir=WORK_FOLDER,
+                initialfile=f"BRQ_{start}_au_{end}.pdf",
+                defaultextension=".pdf",
+                filetypes=[("Fichier PDF", "*.pdf")]
+            )
+            if not output_path:
+                return
+        elif mode == "PNG":
+            output_path = filedialog.askdirectory(
+                title="Choisir le dossier des images PNG",
+                initialdir=WORK_FOLDER,
+                mustexist=False
+            )
+            if not output_path:
+                return
+
         self.run_worker(
-            f"Génération du BRQ du {start} au {end}...",
-            self.export_daily, start, end
+            f"Génération du BRQ ({mode}) du {start} au {end}...",
+            self.generate_report, start, end, mode, output_path
         )
 
-    def export_daily(self, start, end):
+    def generate_report(self, start, end, mode, output_path=None):
+        """Fetch report data once, then route it to the selected presentation."""
         self.log("Connexion à la base existante : aucun import SQL.")
-        self.log(
-            f"Calcul du BRQ et des cumuls à la date de référence {end}."
-        )
+        self.log(f"Calcul du BRQ et des cumuls à la date de référence {end}.")
         conn = connect_database()
         try:
             details = pd.read_sql(
@@ -518,12 +829,119 @@ class BrqApp:
         finally:
             conn.close()
 
-        path = os.path.join(WORK_FOLDER, f"BRQ_{start}_au_{end}.xlsx")
-        write_combined_report(details, summary, start, end, path)
-        self.log(
-            f"Rapport créé : {len(details)} ligne(s) détaillée(s), "
-            f"récapitulatif inclus sur la même feuille : {path}"
+        if mode == "Visualisation":
+            self.log(
+                f"Aperçu prêt : {len(details)} ligne(s) détaillée(s). "
+                "Aucun fichier ne sera créé."
+            )
+            self.root.after(
+                0, lambda: self.show_preview(details, summary, start, end)
+            )
+        elif mode == "Excel":
+            path = os.path.join(WORK_FOLDER, f"BRQ_{start}_au_{end}.xlsx")
+            write_combined_report(details, summary, start, end, path)
+            self.log(f"Rapport Excel créé : {path}")
+        elif mode == "PDF":
+            write_report_pdf(details, summary, start, end, output_path)
+            self.log(f"Rapport PDF créé : {output_path}")
+        elif mode == "PNG":
+            paths = write_report_png_pages(
+                details, summary, start, end, output_path
+            )
+            self.log(
+                f"{len(paths)} image(s) PNG créée(s) dans : {output_path}"
+            )
+            for path in paths:
+                self.log(path)
+        else:
+            raise ValueError(f"Mode de sortie inconnu : {mode}")
+
+    def show_preview(self, details, summary, start, end):
+        """Display the same fetched report data in a scrollable application window."""
+        window = tk.Toplevel(self.root)
+        window.title(f"Aperçu BRQ — {start} au {end}")
+        window.geometry("1250x700")
+        window.minsize(850, 500)
+
+        heading = ttk.Frame(window, padding=10)
+        heading.pack(fill="x")
+        ttk.Label(
+            heading, text="BRQ — ÉTAT DES VENTES",
+            font=("Segoe UI", 15, "bold")
+        ).pack(anchor="w")
+        ttk.Label(
+            heading,
+            text=f"Période : du {start:%d/%m/%Y} au {end:%d/%m/%Y} "
+                 f" | {len(details)} ligne(s)"
+        ).pack(anchor="w")
+
+        notebook = ttk.Notebook(window)
+        notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        detail_tab = ttk.Frame(notebook, padding=6)
+        summary_tab = ttk.Frame(notebook, padding=6)
+        notebook.add(detail_tab, text="Détail des ventes")
+        notebook.add(summary_tab, text="Récapitulatif cumulé")
+
+        detail_columns = [
+            "BRQ_Category", "Invoice_Reference", "Document_Code",
+            "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
+            "Quantite", "Unit_Price", "Total_Amount"
+        ]
+        detail_labels = [
+            "Catégorie", "Référence facture", "Code document", "Code client",
+            "Client", "Code produit", "Désignation", "Quantité",
+            "Prix unitaire", "Montant"
+        ]
+
+        def create_tree(parent, columns, labels, widths):
+            container = ttk.Frame(parent)
+            container.pack(fill="both", expand=True)
+            tree = ttk.Treeview(
+                container, columns=columns, show="headings",
+                displaycolumns=columns
+            )
+            for column, label, width in zip(columns, labels, widths):
+                tree.heading(column, text=label)
+                tree.column(column, width=width, minwidth=70, stretch=True)
+            vertical = ttk.Scrollbar(
+                container, orient="vertical", command=tree.yview
+            )
+            horizontal = ttk.Scrollbar(
+                container, orient="horizontal", command=tree.xview
+            )
+            tree.configure(
+                yscrollcommand=vertical.set, xscrollcommand=horizontal.set
+            )
+            tree.grid(row=0, column=0, sticky="nsew")
+            vertical.grid(row=0, column=1, sticky="ns")
+            horizontal.grid(row=1, column=0, sticky="ew")
+            container.rowconfigure(0, weight=1)
+            container.columnconfigure(0, weight=1)
+            return tree
+
+        detail_tree = create_tree(
+            detail_tab, detail_columns, detail_labels,
+            [95, 125, 110, 100, 190, 100, 220, 95, 110, 110]
         )
+        for record in details.reindex(columns=detail_columns).itertuples(
+            index=False, name=None
+        ):
+            detail_tree.insert(
+                "", "end",
+                values=tuple(_display_value(value) for value in record)
+            )
+
+        summary_columns = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+        summary_tree = create_tree(
+            summary_tab, summary_columns, summary_columns,
+            [220, 180, 180, 180]
+        )
+        for record in summary.itertuples(index=False, name=None):
+            summary_tree.insert(
+                "", "end",
+                values=tuple(_display_value(value) for value in record)
+            )
 
     def open_folder(self):
         try:
