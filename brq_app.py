@@ -240,7 +240,7 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
     sheet.freeze_panes = "A5"
     if detail_count:
         sheet.auto_filter.ref = (
-            f"A{detail_header_row}:J{detail_header_row + detail_count}"
+            f"A{detail_header_row}:I{detail_header_row + detail_count}"
         )
     sheet.sheet_view.showGridLines = False
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
@@ -254,7 +254,7 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
     sheet.page_margins.right = 0.25
     sheet.page_margins.top = 0.5
     sheet.page_margins.bottom = 0.5
-    sheet.print_area = f"A1:J{summary_title_row + len(summary) + 1}"
+    sheet.print_area = f"A1:I{summary_title_row + len(summary) + 1}"
 
     workbook.save(output_path)
 
