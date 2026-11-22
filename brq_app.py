@@ -681,10 +681,12 @@ class BrqApp:
             text="Choisissez les colonnes à afficher dans l'aperçu (les options peuvent être modifiées ici).",
             foreground="#555555"
         ).pack(anchor="w", pady=(0, 4))
+        checkbox_grid = ttk.Frame(columns_frame)
+        checkbox_grid.pack(fill="x")
         for index, (_column, label) in enumerate(self.detail_column_definitions):
             variable = self.detail_column_vars[_column]
             ttk.Checkbutton(
-                columns_frame, text=label, variable=variable,
+                checkbox_grid, text=label, variable=variable,
                 command=self.update_detail_columns
             ).grid(row=index // 5, column=index % 5, sticky="w", padx=6, pady=2)
 
