@@ -270,7 +270,7 @@ def write_combined_report(details, summary, start_date, end_date, output_path, s
     sheet.page_margins.bottom = 0.5
     sheet.print_area = (
         f"A1:{get_column_letter(max(len(detail_columns), len(summary_headers)))}"
-        f"{summary_title_row + len(summary) + 1}
+        f"{summary_title_row + len(summary) + 1}"
     )
 
     workbook.save(output_path)
