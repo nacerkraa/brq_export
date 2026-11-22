@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 import pymysql
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 WORK_FOLDER = r"C:\BRQ"
 DEFAULT_SQL_PATH = os.path.join(WORK_FOLDER, "UAB_OULEDHAMLA_COM26.sql")
@@ -28,8 +29,15 @@ SELECT
   WHEN f.Libelle='RUMINANTS' AND sf.Libelle IN ('BOVIN','OVIN') THEN 'RUMINANTS'
   WHEN f.Libelle='DIVERS' AND sf.Libelle='DIVERS' THEN 'DIVERS'
  END AS BRQ_Category,
- e.Date AS Date_mvt, e.Libelle_Client AS Client_Name, e.Code_FC AS Code,
- d.Produit_Code, d.Quantite, d.Valeur AS Total_Amount
+ e.Reference AS Invoice_Reference,
+ e.Code_FC AS Document_Code,
+ e.code_tiers AS Client_Code,
+ e.Libelle_Client AS Client_Name,
+ d.Produit_Code,
+ d.Libelle AS Product_Label,
+ d.Quantite,
+ d.Prix AS Unit_Price,
+ d.Valeur AS Total_Amount
 FROM entete_mvts e
 JOIN detail_mvts d ON d.Entete_mvts_Code=e.Code
  AND d.Type_mvt=e.Type_mvt AND d.Type_bon=e.Type_bon
@@ -48,7 +56,7 @@ ORDER BY CASE
  WHEN f.Libelle='VOLAILLE' AND sf.Libelle='PONTE' THEN 2
  WHEN f.Libelle='RUMINANTS' AND sf.Libelle IN ('BOVIN','OVIN') THEN 3
  WHEN f.Libelle='DIVERS' AND sf.Libelle='DIVERS' THEN 4
- END, e.Libelle_Client, e.Code, d.Produit_Code
+ END, e.Reference, e.Code_FC, e.Libelle_Client, d.Produit_Code
 """
 
 RECAP_QUERY = """
@@ -124,15 +132,128 @@ def import_sql_into_database(sql_path):
         raise RuntimeError(result.stderr.decode(errors="replace").strip()
                            or "Échec de l'import SQL.")
 
-def write_excel(dataframe, output_path, sheet_name):
+def write_combined_report(details, summary, start_date, end_date, output_path):
+    """Write detailed BRQ and cumulative recap together on one worksheet."""
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False, sheet_name=sheet_name)
-        sheet = writer.sheets[sheet_name]
-        for index, name in enumerate(dataframe.columns, 1):
-            lengths = dataframe[name].fillna("").astype(str).map(len).tolist()
-            letter = sheet.cell(row=1, column=index).column_letter
-            sheet.column_dimensions[letter].width = min(max([len(name), *lengths])+2, 50)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "BRQ"
+
+    navy = "1F4E78"
+    light_blue = "D9EAF7"
+    pale_grey = "F2F2F2"
+    white = "FFFFFF"
+    thin_grey = Side(style="thin", color="D9E1F2")
+    header_fill = PatternFill("solid", fgColor=navy)
+    section_fill = PatternFill("solid", fgColor=light_blue)
+
+    detail_columns = [
+        "BRQ_Category", "Invoice_Reference", "Document_Code",
+        "Client_Code", "Client_Name", "Produit_Code", "Product_Label",
+        "Quantite", "Unit_Price", "Total_Amount"
+    ]
+    detail_headers = [
+        "Catégorie", "Référence facture", "Code document",
+        "Code client", "Client", "Code produit", "Désignation",
+        "Quantité", "Prix unitaire", "Montant"
+    ]
+    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
+
+    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(detail_headers))
+    title = sheet.cell(1, 1, "BRQ — ÉTAT DES VENTES")
+    title.font = Font(name="Calibri", size=16, bold=True, color=white)
+    title.fill = PatternFill("solid", fgColor=navy)
+    title.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 28
+
+    sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(detail_headers))
+    period = sheet.cell(2, 1, f"Période : du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}")
+    period.font = Font(name="Calibri", size=11, bold=True, color=navy)
+    period.alignment = Alignment(horizontal="center")
+    sheet.row_dimensions[2].height = 22
+
+    detail_header_row = 4
+    for col, label in enumerate(detail_headers, 1):
+        cell = sheet.cell(detail_header_row, col, label)
+        cell.font = Font(bold=True, color=white)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = Border(bottom=thin_grey)
+    sheet.row_dimensions[detail_header_row].height = 30
+
+    detail_count = 0
+    category_fills = {
+        "CHAIR": "E2F0D9", "PONTE": "FFF2CC",
+        "RUMINANTS": "DDEBF7", "DIVERS": "E4DFEC"
+    }
+    for record in details.reindex(columns=detail_columns).itertuples(index=False, name=None):
+        row_number = detail_header_row + 1 + detail_count
+        for col, value in enumerate(record, 1):
+            if pd.isna(value):
+                value = None
+            cell = sheet.cell(row_number, col, value)
+            cell.border = Border(bottom=thin_grey)
+            if col == 1:
+                cell.font = Font(bold=True)
+                fill = category_fills.get(str(value), pale_grey)
+                cell.fill = PatternFill("solid", fgColor=fill)
+            elif col in (8, 9, 10):
+                cell.number_format = '#,##0.00;[Red]-#,##0.00'
+            if col in (2, 3, 4, 6):
+                cell.number_format = "@"
+        detail_count += 1
+
+    summary_title_row = detail_header_row + detail_count + 3
+    sheet.merge_cells(start_row=summary_title_row, start_column=1,
+                      end_row=summary_title_row, end_column=len(summary_headers))
+    summary_title = sheet.cell(summary_title_row, 1, "RÉCAPITULATIF CUMULÉ")
+    summary_title.font = Font(bold=True, size=12, color=white)
+    summary_title.fill = header_fill
+    summary_title.alignment = Alignment(horizontal="center")
+    for col, label in enumerate(summary_headers, 1):
+        cell = sheet.cell(summary_title_row + 1, col, label)
+        cell.font = Font(bold=True, color=white)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for offset, record in enumerate(summary.itertuples(index=False, name=None), 2):
+        row_number = summary_title_row + offset
+        for col, value in enumerate(record, 1):
+            cell = sheet.cell(row_number, col, value)
+            cell.border = Border(bottom=thin_grey)
+            if col > 1:
+                cell.number_format = '#,##0.00;[Red]-#,##0.00'
+            if str(record[0]) == "TOTAL":
+                cell.font = Font(bold=True)
+                cell.fill = section_fill
+
+    widths = [16, 22, 17, 16, 30, 15, 34, 14, 16, 17]
+    for index, width in enumerate(widths, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    sheet.freeze_panes = "A5"
+    if detail_count:
+        sheet.auto_filter.ref = (
+            f"A{detail_header_row}:J{detail_header_row + detail_count}"
+        )
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.print_title_rows = "1:4"
+    sheet.sheet_properties.pageSetUpPr.autoPageBreaks = False
+    sheet.page_margins.left = 0.25
+    sheet.page_margins.right = 0.25
+    sheet.page_margins.top = 0.5
+    sheet.page_margins.bottom = 0.5
+    sheet.print_area = f"A1:J{summary_title_row + len(summary) + 1}"
+
+    workbook.save(output_path)
 
 def fetch_period_totals(connection, start_date, end_date):
     """Return validated category quantities for one inclusive date period."""
@@ -235,10 +356,10 @@ class BrqApp:
         ttk.Button(shortcuts, text="Année", command=self.select_year).pack(side="left", padx=3)
 
         actions = ttk.Frame(period); actions.pack(fill="x", pady=(8, 0))
-        self.daily_btn = ttk.Button(actions, text="Générer le BRQ", command=self.on_daily)
+        self.daily_btn = ttk.Button(
+            actions, text="Générer le rapport Excel", command=self.on_daily
+        )
         self.daily_btn.pack(side="left")
-        self.recap_btn = ttk.Button(actions, text="Exporter le récap", command=self.on_recap)
-        self.recap_btn.pack(side="left", padx=8)
         ttk.Button(actions, text="Ouvrir le dossier", command=self.open_folder).pack(side="left")
 
         log = ttk.LabelFrame(self.root, text="Journal", padding=10)
@@ -270,7 +391,7 @@ class BrqApp:
     def set_busy(self, busy):
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for button in (self.update_btn, self.daily_btn, self.recap_btn):
+        for button in (self.update_btn, self.daily_btn):
             button.configure(state=state)
 
     def run_worker(self, message, callback, *args):
@@ -385,44 +506,24 @@ class BrqApp:
 
     def export_daily(self, start, end):
         self.log("Connexion à la base existante : aucun import SQL.")
+        self.log(
+            f"Calcul du BRQ et des cumuls à la date de référence {end}."
+        )
         conn = connect_database()
         try:
-            frame = pd.read_sql(
+            details = pd.read_sql(
                 BRQ_QUERY, conn, params={"date1": start, "date2": end}
             )
+            summary = build_cumulative_summary(conn, end)
         finally:
             conn.close()
-        if frame.empty:
-            self.log("Aucune ligne trouvée pour cette période.")
-            return
-        path = os.path.join(WORK_FOLDER, f"BRQ_Export_{start}_au_{end}.xlsx")
-        write_excel(frame, path, "BRQ")
-        self.log(f"{len(frame)} lignes exportées : {path}")
 
-    def on_recap(self):
-        period = self._validated_period()
-        if period is None:
-            return
-        start, end = period
-        self.run_worker(
-            f"Récapitulatif du {start} au {end}...",
-            self.export_recap, start, end
-        )
-
-    def export_recap(self, start, end):
-        self.log("Connexion à la base existante : aucun import SQL.")
+        path = os.path.join(WORK_FOLDER, f"BRQ_{start}_au_{end}.xlsx")
+        write_combined_report(details, summary, start, end, path)
         self.log(
-            f"Calcul des cumuls à la date de référence {end} "
-            "(jour, début du mois et début de l'année)."
+            f"Rapport créé : {len(details)} ligne(s) détaillée(s), "
+            f"récapitulatif inclus sur la même feuille : {path}"
         )
-        conn = connect_database()
-        try:
-            frame = build_cumulative_summary(conn, end)
-        finally:
-            conn.close()
-        path = os.path.join(WORK_FOLDER, f"BRQ_Recap_{end}.xlsx")
-        write_excel(frame, path, "Recap")
-        self.log(f"Récapitulatif enregistré : {path}")
 
     def open_folder(self):
         try:
