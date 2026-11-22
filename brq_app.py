@@ -14,6 +14,7 @@ import pymysql
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 WORK_FOLDER = r"C:\BRQ"
+OUTPUT_FOLDER = os.path.join(WORK_FOLDER, "Exports")
 DEFAULT_SQL_PATH = os.path.join(WORK_FOLDER, "UAB_OULEDHAMLA_COM26.sql")
 CLEANED_SQL_PATH = os.path.join(WORK_FOLDER, "_cleaned_import.sql")
 MYSQL_EXE_PATH = r"C:\xampp\mysql\bin\mysql.exe"
@@ -133,8 +134,8 @@ def import_sql_into_database(sql_path):
         raise RuntimeError(result.stderr.decode(errors="replace").strip()
                            or "Échec de l'import SQL.")
 
-def write_combined_report(details, summary, start_date, end_date, output_path):
-    """Write detailed BRQ and cumulative recap together on one worksheet."""
+def write_combined_report(details, summary, start_date, end_date, output_path, selected_columns=None):
+    """Write the selected BRQ detail columns and the complete cumulative recap."""
     from openpyxl import Workbook
     from openpyxl.utils import get_column_letter
 
@@ -151,16 +152,24 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
     header_fill = PatternFill("solid", fgColor=navy)
     section_fill = PatternFill("solid", fgColor=light_blue)
 
-    detail_columns = [
+    all_detail_columns = [
         "BRQ_Category", "Invoice_Reference", "Client_Name", "Client_Code",
         "Produit_Code", "Quantite", "Total_Amount", "Product_Label",
         "Unit_Price"
     ]
-    detail_headers = [
+    all_detail_headers = [
         "Catégorie", "Référence facture", "Client", "Code client",
         "Code produit", "Quantité", "Montant", "Désignation",
         "Prix unitaire"
     ]
+    selected = set(selected_columns) if selected_columns is not None else set(all_detail_columns)
+    selected_pairs = [
+        (column, label)
+        for column, label in zip(all_detail_columns, all_detail_headers)
+        if column in selected
+    ] or [(all_detail_columns[0], all_detail_headers[0])]
+    detail_columns = [column for column, _label in selected_pairs]
+    detail_headers = [label for _column, label in selected_pairs]
     summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
 
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(detail_headers))
@@ -201,9 +210,9 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
                 cell.font = Font(bold=True)
                 fill = category_fills.get(str(value), pale_grey)
                 cell.fill = PatternFill("solid", fgColor=fill)
-            elif col in (5, 6, 7, 9):
+            elif detail_columns[col - 1] in ("Quantite", "Total_Amount", "Unit_Price"):
                 cell.number_format = '#,##0.00;[Red]-#,##0.00'
-            if col in (2, 4, 5):
+            if detail_columns[col - 1] in ("Invoice_Reference", "Client_Code", "Produit_Code"):
                 cell.number_format = "@"
         detail_count += 1
 
@@ -233,14 +242,19 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
                 cell.font = Font(bold=True)
                 cell.fill = section_fill
 
-    widths = [16, 22, 30, 16, 15, 14, 17, 34, 16]
-    for index, width in enumerate(widths, 1):
-        sheet.column_dimensions[get_column_letter(index)].width = width
+    width_by_column = {
+        "BRQ_Category": 16, "Invoice_Reference": 22, "Client_Name": 30,
+        "Client_Code": 16, "Produit_Code": 15, "Quantite": 14,
+        "Total_Amount": 17, "Product_Label": 34, "Unit_Price": 16
+    }
+    for index, column in enumerate(detail_columns, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = width_by_column[column]
 
     sheet.freeze_panes = "A5"
     if detail_count:
+        last_detail_column = get_column_letter(len(detail_columns))
         sheet.auto_filter.ref = (
-            f"A{detail_header_row}:I{detail_header_row + detail_count}"
+            f"A{detail_header_row}:{last_detail_column}{detail_header_row + detail_count}"
         )
     sheet.sheet_view.showGridLines = False
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
@@ -254,7 +268,10 @@ def write_combined_report(details, summary, start_date, end_date, output_path):
     sheet.page_margins.right = 0.25
     sheet.page_margins.top = 0.5
     sheet.page_margins.bottom = 0.5
-    sheet.print_area = f"A1:I{summary_title_row + len(summary) + 1}"
+    sheet.print_area = (
+        f"A1:{get_column_letter(max(len(detail_columns), len(summary_headers)))}"
+        f"{summary_title_row + len(summary) + 1}
+    )
 
     workbook.save(output_path)
 
@@ -274,8 +291,8 @@ def _display_summary_value(column, value):
     return _display_value(value)
 
 
-def write_report_pdf(details, summary, start_date, end_date, output_path):
-    """Create a paginated, landscape A3 PDF with details and cumulative recap."""
+def write_report_pdf(details, summary, start_date, end_date, output_path, selected_columns=None):
+    """Create a paginated PDF using selected detail columns and the complete recap."""
     from xml.sax.saxutils import escape
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
@@ -316,17 +333,25 @@ def write_report_pdf(details, summary, start_date, end_date, output_path):
         Paragraph("DÉTAIL DES VENTES", styles["Heading2"]),
         Spacer(1, 3)
     ]
-    headers = [
+    all_headers = [
         "Catégorie", "Référence facture", "Client", "Code client",
         "Code produit", "Quantité", "Montant", "Désignation",
         "Prix unitaire"
     ]
-    table_data = [[Paragraph(escape(label), header_style) for label in headers]]
-    detail_columns = [
+    all_detail_columns = [
         "BRQ_Category", "Invoice_Reference", "Client_Name", "Client_Code",
         "Produit_Code", "Quantite", "Total_Amount", "Product_Label",
         "Unit_Price"
     ]
+    selected = set(selected_columns) if selected_columns is not None else set(all_detail_columns)
+    selected_pairs = [
+        (column, label)
+        for column, label in zip(all_detail_columns, all_headers)
+        if column in selected
+    ] or [(all_detail_columns[0], all_headers[0])]
+    detail_columns = [column for column, _label in selected_pairs]
+    headers = [label for _column, label in selected_pairs]
+    table_data = [[Paragraph(escape(label), header_style) for label in headers]]
     for record in details.reindex(columns=detail_columns).itertuples(index=False, name=None):
         table_data.append([
             Paragraph(escape(_display_value(value)), cell_style)
@@ -334,7 +359,12 @@ def write_report_pdf(details, summary, start_date, end_date, output_path):
         ])
 
     available_width = page_width - 28 * mm
-    proportions = [0.09, 0.12, 0.18, 0.09, 0.09, 0.07, 0.10, 0.16, 0.10]
+    proportion_by_column = {
+        "BRQ_Category": 0.09, "Invoice_Reference": 0.12, "Client_Name": 0.18,
+        "Client_Code": 0.09, "Produit_Code": 0.09, "Quantite": 0.07,
+        "Total_Amount": 0.10, "Product_Label": 0.16, "Unit_Price": 0.10
+    }
+    proportions = [proportion_by_column[column] for column in detail_columns]
     col_widths = [available_width * value / sum(proportions) for value in proportions]
     detail_table = LongTable(
         table_data, colWidths=col_widths, repeatRows=1, hAlign="LEFT"
@@ -352,12 +382,15 @@ def write_report_pdf(details, summary, start_date, end_date, output_path):
         "CHAIR": "#E2F0D9", "PONTE": "#FFF2CC",
         "RUMINANTS": "#DDEBF7", "DIVERS": "#E4DFEC"
     }
-    for row_index, category in enumerate(details.get("BRQ_Category", []), 1):
-        fill = fills.get(str(category))
-        if fill:
-            detail_commands.append(
-                ("BACKGROUND", (0, row_index), (0, row_index), colors.HexColor(fill))
-            )
+    if "BRQ_Category" in detail_columns:
+        category_column_index = detail_columns.index("BRQ_Category")
+        for row_index, category in enumerate(details["BRQ_Category"], 1):
+            fill = fills.get(str(category))
+            if fill:
+                detail_commands.append(
+                    ("BACKGROUND", (category_column_index, row_index),
+                     (category_column_index, row_index), colors.HexColor(fill))
+                )
     detail_table.setStyle(TableStyle(detail_commands))
     if len(table_data) == 1:
         story.append(Paragraph("Aucun détail pour cette période.", styles["Normal"]))
@@ -417,22 +450,29 @@ def write_report_pdf(details, summary, start_date, end_date, output_path):
     document.build(story, onFirstPage=add_page_number, onLaterPages=add_page_number)
 
 
-def write_report_png_pages(details, summary, start_date, end_date, output_dir):
-    """Export readable, numbered PNG pages; the final page contains the recap."""
+def write_report_png_pages(details, summary, start_date, end_date, output_dir, selected_columns=None):
+    """Export PNG pages using selected detail columns and the complete recap."""
     from PIL import Image, ImageDraw, ImageFont
 
     os.makedirs(output_dir, exist_ok=True)
     base_name = f"BRQ_{start_date}_au_{end_date}"
-    headers = [
+    all_headers = [
         "Catégorie", "Réf. facture", "Client", "Code client",
         "Code produit", "Quantité", "Montant", "Désignation", "Prix unit."
     ]
-    columns = [
+    all_columns = [
         "BRQ_Category", "Invoice_Reference", "Client_Name", "Client_Code",
         "Produit_Code", "Quantite", "Total_Amount", "Product_Label",
         "Unit_Price"
     ]
-    widths = [125, 135, 230, 120, 115, 115, 135, 285, 135]
+    all_widths = [125, 135, 230, 120, 115, 115, 135, 285, 135]
+    selected = set(selected_columns) if selected_columns is not None else set(all_columns)
+    selected_indices = [index for index, column in enumerate(all_columns) if column in selected]
+    if not selected_indices:
+        selected_indices = [0]
+    columns = [all_columns[index] for index in selected_indices]
+    headers = [all_headers[index] for index in selected_indices]
+    widths = [all_widths[index] for index in selected_indices]
     image_width = sum(widths) + 60
     margin = 30
     row_height = 34
@@ -490,13 +530,14 @@ def write_report_png_pages(details, summary, start_date, end_date, output_dir):
 
         for record in chunk.reindex(columns=columns).itertuples(index=False, name=None):
             x = margin
-            category = str(record[0])
+            values_by_column = dict(zip(columns, record))
+            category = str(values_by_column.get("BRQ_Category", ""))
             row_fill = "#FFFFFF" if y // row_height % 2 else "#F7F9FB"
-            for column_index, (width, value) in enumerate(zip(widths, record)):
+            for column_index, (column, width, value) in enumerate(zip(columns, widths, record)):
                 fill = {
                     "CHAIR": "#E2F0D9", "PONTE": "#FFF2CC",
                     "RUMINANTS": "#DDEBF7", "DIVERS": "#E4DFEC"
-                }.get(category, row_fill) if column_index == 0 else row_fill
+                }.get(category, row_fill) if column == "BRQ_Category" else row_fill
                 draw_cell(draw, x, y, width, row_height, value, font, fill)
                 x += width
             y += row_height
@@ -678,7 +719,7 @@ class BrqApp:
         columns_frame.pack(fill="x", **pad)
         ttk.Label(
             columns_frame,
-            text="Choisissez les colonnes à afficher dans l'aperçu (les options peuvent être modifiées ici).",
+            text="Choisissez les colonnes à afficher dans l'aperçu et dans les exports Excel, PDF et PNG.",
             foreground="#555555"
         ).pack(anchor="w", pady=(0, 4))
         checkbox_grid = ttk.Frame(columns_frame)
@@ -843,11 +884,13 @@ class BrqApp:
         start, end = period
         mode = self.output_var.get()
 
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+        selected_columns = self.get_selected_detail_columns()
         output_path = None
         if mode == "PDF":
             output_path = filedialog.asksaveasfilename(
                 title="Enregistrer le rapport PDF",
-                initialdir=WORK_FOLDER,
+                initialdir=OUTPUT_FOLDER,
                 initialfile=f"BRQ_{start}_au_{end}.pdf",
                 defaultextension=".pdf",
                 filetypes=[("Fichier PDF", "*.pdf")]
@@ -857,7 +900,7 @@ class BrqApp:
         elif mode == "PNG":
             output_path = filedialog.askdirectory(
                 title="Choisir le dossier des images PNG",
-                initialdir=WORK_FOLDER,
+                initialdir=OUTPUT_FOLDER,
                 mustexist=False
             )
             if not output_path:
@@ -865,10 +908,10 @@ class BrqApp:
 
         self.run_worker(
             f"Génération du BRQ ({mode}) du {start} au {end}...",
-            self.generate_report, start, end, mode, output_path
+            self.generate_report, start, end, mode, output_path, selected_columns
         )
 
-    def generate_report(self, start, end, mode, output_path=None):
+    def generate_report(self, start, end, mode, output_path=None, selected_columns=None):
         """Fetch report data once, then route it to the selected presentation."""
         self.log("Connexion à la base existante : aucun import SQL.")
         self.log(f"Calcul du BRQ et des cumuls à la date de référence {end}.")
@@ -887,18 +930,18 @@ class BrqApp:
                 "Aucun fichier ne sera créé."
             )
             self.root.after(
-                0, lambda: self.show_preview(details, summary, start, end)
+                0, lambda: self.show_preview(details, summary, start, end, selected_columns)
             )
         elif mode == "Excel":
-            path = os.path.join(WORK_FOLDER, f"BRQ_{start}_au_{end}.xlsx")
-            write_combined_report(details, summary, start, end, path)
+            path = os.path.join(OUTPUT_FOLDER, f"BRQ_{start}_au_{end}.xlsx")
+            write_combined_report(details, summary, start, end, path, selected_columns)
             self.log(f"Rapport Excel créé : {path}")
         elif mode == "PDF":
-            write_report_pdf(details, summary, start, end, output_path)
+            write_report_pdf(details, summary, start, end, output_path, selected_columns)
             self.log(f"Rapport PDF créé : {output_path}")
         elif mode == "PNG":
             paths = write_report_png_pages(
-                details, summary, start, end, output_path
+                details, summary, start, end, output_path, selected_columns
             )
             self.log(
                 f"{len(paths)} image(s) PNG créée(s) dans : {output_path}"
@@ -908,7 +951,7 @@ class BrqApp:
         else:
             raise ValueError(f"Mode de sortie inconnu : {mode}")
 
-    def show_preview(self, details, summary, start, end):
+    def show_preview(self, details, summary, start, end, selected_columns=None):
         """Display the same fetched report data in a scrollable application window."""
         window = tk.Toplevel(self.root)
         window.title(f"Aperçu BRQ — {start} au {end}")
@@ -977,7 +1020,8 @@ class BrqApp:
             detail_tab, detail_columns, detail_labels, column_widths
         )
         self.detail_tree = detail_tree
-        self.update_detail_columns()
+        visible_columns = selected_columns or ["BRQ_Category"]
+        detail_tree["displaycolumns"] = visible_columns
         for record in details.reindex(columns=detail_columns).itertuples(
             index=False, name=None
         ):
@@ -1000,26 +1044,31 @@ class BrqApp:
                 )
             )
 
-    def update_detail_columns(self):
-        """Apply the main-window column selection to an open detail preview."""
-        if self.detail_tree is None or not self.detail_tree.winfo_exists():
-            return
+    def get_selected_detail_columns(self):
+        """Return selected detail columns in their original report order."""
         selected = [
             column for column, _label in self.detail_column_definitions
             if self.detail_column_vars[column].get()
         ]
         # Keep at least one visible column so the table never appears empty.
-        self.detail_tree["displaycolumns"] = selected or ("BRQ_Category",)
+        return selected or ["BRQ_Category"]
+
+    def update_detail_columns(self):
+        """Apply the main-window column selection to an open detail preview."""
+        if self.detail_tree is None or not self.detail_tree.winfo_exists():
+            return
+        self.detail_tree["displaycolumns"] = self.get_selected_detail_columns()
 
     def open_folder(self):
         try:
-            os.makedirs(WORK_FOLDER, exist_ok=True)
-            os.startfile(WORK_FOLDER)
+            os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+            os.startfile(OUTPUT_FOLDER)
         except Exception as exc:
             messagebox.showerror("Ouverture du dossier", str(exc))
 
 def main():
     os.makedirs(WORK_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     root = tk.Tk()
     BrqApp(root)
     root.mainloop()
