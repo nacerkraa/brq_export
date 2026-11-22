@@ -604,8 +604,8 @@ class BrqApp:
     def __init__(self, root):
         self.root = root
         root.title("BRQ Export Manager")
-        root.geometry("750x570")
-        root.minsize(690, 510)
+        root.geometry("850x680")
+        root.minsize(760, 600)
         self.messages = queue.Queue()
         self.busy = False
         today = dt.date.today()
@@ -614,6 +614,26 @@ class BrqApp:
         self.to_var = tk.StringVar(value=today.isoformat())
         self.status_var = tk.StringVar(value="Vérification de la base...")
         self.output_var = tk.StringVar(value="Excel")
+        self.detail_column_definitions = [
+            ("BRQ_Category", "Catégorie"),
+            ("Invoice_Reference", "Référence facture"),
+            ("Client_Name", "Client"),
+            ("Client_Code", "Code client"),
+            ("Produit_Code", "Code produit"),
+            ("Quantite", "Quantité"),
+            ("Total_Amount", "Montant"),
+            ("Product_Label", "Désignation"),
+            ("Unit_Price", "Prix unitaire"),
+        ]
+        default_columns = {
+            "BRQ_Category", "Invoice_Reference", "Client_Name",
+            "Client_Code", "Produit_Code", "Quantite", "Total_Amount"
+        }
+        self.detail_column_vars = {
+            column: tk.BooleanVar(value=column in default_columns)
+            for column, _label in self.detail_column_definitions
+        }
+        self.detail_tree = None
         self.build_ui()
         root.after(100, self.poll_messages)
         root.after(200, self.check_connection)
@@ -651,6 +671,22 @@ class BrqApp:
         ttk.Button(shortcuts, text="Date", command=self.select_date).pack(side="left", padx=3)
         ttk.Button(shortcuts, text="Mois", command=self.select_month).pack(side="left", padx=3)
         ttk.Button(shortcuts, text="Année", command=self.select_year).pack(side="left", padx=3)
+
+        columns_frame = ttk.LabelFrame(
+            self.root, text="Colonnes du détail des ventes", padding=(10, 6)
+        )
+        columns_frame.pack(fill="x", **pad)
+        ttk.Label(
+            columns_frame,
+            text="Choisissez les colonnes à afficher dans l'aperçu (les options peuvent être modifiées ici).",
+            foreground="#555555"
+        ).pack(anchor="w", pady=(0, 4))
+        for index, (_column, label) in enumerate(self.detail_column_definitions):
+            variable = self.detail_column_vars[_column]
+            ttk.Checkbutton(
+                columns_frame, text=label, variable=variable,
+                command=self.update_detail_columns
+            ).grid(row=index // 5, column=index % 5, sticky="w", padx=6, pady=2)
 
         actions = ttk.Frame(period); actions.pack(fill="x", pady=(8, 0))
         ttk.Label(actions, text="Sortie :").pack(side="left", padx=(0, 6))
@@ -934,35 +970,12 @@ class BrqApp:
             container.columnconfigure(0, weight=1)
             return tree
 
-        default_detail_columns = {
-            "BRQ_Category", "Invoice_Reference", "Client_Name",
-            "Client_Code", "Produit_Code", "Quantite", "Total_Amount"
-        }
         column_widths = [95, 125, 190, 110, 100, 95, 110, 220, 110]
-        selector = ttk.LabelFrame(detail_tab, text="Colonnes à afficher", padding=(8, 5))
-        selector.pack(fill="x", pady=(0, 6))
-        visible_vars = {}
-        for index, (column, label) in enumerate(zip(detail_columns, detail_labels)):
-            variable = tk.BooleanVar(value=column in default_detail_columns)
-            visible_vars[column] = variable
-            ttk.Checkbutton(
-                selector, text=label, variable=variable,
-                command=lambda: update_visible_columns()
-            ).grid(row=index // 5, column=index % 5, sticky="w", padx=5, pady=2)
-
         detail_tree = create_tree(
             detail_tab, detail_columns, detail_labels, column_widths
         )
-        detail_tree["displaycolumns"] = [
-            column for column in detail_columns if visible_vars[column].get()
-        ]
-
-        def update_visible_columns():
-            selected = [
-                column for column in detail_columns
-                if visible_vars[column].get()
-            ]
-            detail_tree["displaycolumns"] = selected or ("BRQ_Category",)
+        self.detail_tree = detail_tree
+        self.update_detail_columns()
         for record in details.reindex(columns=detail_columns).itertuples(
             index=False, name=None
         ):
@@ -984,6 +997,17 @@ class BrqApp:
                     for column, value in zip(summary_columns, record)
                 )
             )
+
+    def update_detail_columns(self):
+        """Apply the main-window column selection to an open detail preview."""
+        if self.detail_tree is None or not self.detail_tree.winfo_exists():
+            return
+        selected = [
+            column for column, _label in self.detail_column_definitions
+            if self.detail_column_vars[column].get()
+        ]
+        # Keep at least one visible column so the table never appears empty.
+        self.detail_tree["displaycolumns"] = selected or ("BRQ_Category",)
 
     def open_folder(self):
         try:
