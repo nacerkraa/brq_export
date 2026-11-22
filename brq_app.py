@@ -508,8 +508,9 @@ def write_report_png_pages(details, summary, start_date, end_date, output_dir):
               f"Période du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}",
               fill="#333333", font=small_font)
     recap_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année"]
-    recap_widths = [width * image_width // sum(widths) for width in [300, 300, 300, 300]]
-    recap_widths[-1] += image_width - sum(recap_widths)
+    recap_content_width = image_width - 2 * margin
+    recap_widths = [recap_content_width // 4] * 4
+    recap_widths[-1] += recap_content_width - sum(recap_widths)
     y = 105
     x = margin
     for width, label in zip(recap_widths, recap_headers):
