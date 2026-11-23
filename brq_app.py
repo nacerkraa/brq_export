@@ -24,6 +24,13 @@ DB_CONFIG = {"host": "localhost", "user": "root", "password": "",
 
 ANNUAL_OBJECTIVE = 380000.00
 
+# Monthly sales objectives for 2026 (DZD).
+MONTHLY_OBJECTIVES_2026 = {
+    1: 35900.00, 2: 35500.00, 3: 35800.00, 4: 32200.00,
+    5: 33200.00, 6: 33300.00, 7: 32300.00, 8: 32300.00,
+    9: 35000.00, 10: 35500.00, 11: 35700.00, 12: 35600.00,
+}
+
 BRQ_QUERY = """
 SELECT
  CASE
@@ -170,7 +177,7 @@ def write_combined_report(details, summary, start_date, end_date, output_path, s
     ] or [(all_detail_columns[0], all_detail_headers[0])]
     detail_columns = [column for column, _label in selected_pairs]
     detail_headers = [label for _column, label in selected_pairs]
-    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
+    summary_headers = list(summary.columns)
 
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(detail_headers))
     title = sheet.cell(1, 1, "BRQ — ÉTAT DES VENTES")
@@ -234,7 +241,7 @@ def write_combined_report(details, summary, start_date, end_date, output_path, s
         for col, value in enumerate(record, 1):
             cell = sheet.cell(row_number, col, value)
             cell.border = Border(bottom=thin_grey)
-            if col == 5:
+            if col in (5, 6):
                 cell.number_format = '0.00"%"'
             elif col > 1:
                 cell.number_format = '#,##0.00;[Red]-#,##0.00'
@@ -285,8 +292,8 @@ def _display_value(value):
 
 
 def _display_summary_value(column, value):
-    """Format the annual objective achievement as a percentage."""
-    if column == "Objectif annuel (%)":
+    """Format annual and monthly objective achievements as percentages."""
+    if column in ("Objectif annuel (%)", "Objectif mensuel (%)"):
         return "" if pd.isna(value) else f"{float(value):.2f}%"
     return _display_value(value)
 
@@ -402,7 +409,7 @@ def write_report_pdf(details, summary, start_date, end_date, output_path, select
         Paragraph("RÉCAPITULATIF CUMULÉ", styles["Heading2"]),
         Spacer(1, 4)
     ])
-    summary_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
+    summary_headers = list(summary.columns)
     summary_data = [[Paragraph(escape(x), header_style) for x in summary_headers]]
     for record in summary.itertuples(index=False, name=None):
         summary_data.append([
@@ -411,7 +418,7 @@ def write_report_pdf(details, summary, start_date, end_date, output_path, select
         ])
     summary_table = Table(
         summary_data,
-        colWidths=[available_width * 0.20] * 5,
+        colWidths=[available_width / len(summary_headers)] * len(summary_headers),
         repeatRows=1,
         hAlign="LEFT"
     )
@@ -558,9 +565,9 @@ def write_report_png_pages(details, summary, start_date, end_date, output_dir, s
     draw.text((margin, 62),
               f"Période du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}",
               fill="#333333", font=small_font)
-    recap_headers = ["Catégorie", "Jour", "Cumul mois", "Cumul année", "Objectif annuel (%)"]
+    recap_headers = list(summary.columns)
     recap_content_width = image_width - 2 * margin
-    recap_widths = [recap_content_width // 5] * 5
+    recap_widths = [recap_content_width // len(recap_headers)] * len(recap_headers)
     recap_widths[-1] += recap_content_width - sum(recap_widths)
     y = 105
     x = margin
@@ -627,16 +634,26 @@ def build_cumulative_summary(connection, reference_date):
             "Cumul mois": monthly[category],
             "Cumul année": yearly[category],
             "Objectif annuel (%)": None,
+            "Objectif mensuel (%)": None,
         }
         for category in categories
     ]
     annual_total = sum(yearly.values())
+    monthly_total = sum(monthly.values())
+    monthly_objective = (
+        MONTHLY_OBJECTIVES_2026.get(reference_date.month)
+        if reference_date.year == 2026 else None
+    )
     rows.append({
         "Catégorie": "TOTAL",
         "Jour": sum(daily.values()),
-        "Cumul mois": sum(monthly.values()),
+        "Cumul mois": monthly_total,
         "Cumul année": annual_total,
         "Objectif annuel (%)": annual_total / ANNUAL_OBJECTIVE * 100,
+        "Objectif mensuel (%)": (
+            monthly_total / monthly_objective * 100
+            if monthly_objective else None
+        ),
     })
     return pd.DataFrame(rows)
 
@@ -1033,7 +1050,7 @@ class BrqApp:
         summary_columns = list(summary.columns)
         summary_tree = create_tree(
             summary_tab, summary_columns, summary_columns,
-            [220, 180, 180, 180, 190]
+            [190, 135, 150, 150, 170, 180]
         )
         for record in summary.itertuples(index=False, name=None):
             summary_tree.insert(
